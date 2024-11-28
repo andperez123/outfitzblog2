@@ -1,110 +1,151 @@
-import { db } from '../firebase/clientApp';
+import { initializeApp } from 'firebase/app'
 import { 
+  getFirestore, 
   collection, 
   addDoc, 
-  getDocs, 
   query, 
-  orderBy, 
+  where, 
+  getDocs,
   limit,
-  startAfter,
   Timestamp,
-  where,
-  DocumentSnapshot,
-  QueryDocumentSnapshot 
-} from 'firebase/firestore';
+  orderBy,
+  QueryDocumentSnapshot,
+  startAfter,
+  limit as firestoreLimit
+} from 'firebase/firestore'
 
-// Types
-export interface BlogPost {
-  id: string;
-  title: string;
-  date: Date;
-  tags: string[];
-  draft: boolean;
-  summary: string;
-  content: string;
-  slug: string;
-  author: string;
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
 }
 
-export interface FirestorePost {
-  title: string;
-  date: Timestamp;
-  tags: string[];
-  draft: boolean;
-  summary: string;
-  content: string;
-  slug: string;
-  author: string;
+// Initialize Firebase
+const app = initializeApp(firebaseConfig)
+const db = getFirestore(app)
+
+export type BlogPost = {
+  id: string
+  title: string
+  date: Date
+  slug: string
+  tags: string[]
+  draft: boolean
+  summary: string
+  content: string
+  author: string
 }
 
-export interface PublishedPostsResult {
-  posts: BlogPost[];
-  lastVisible: DocumentSnapshot | null;
-  hasMore: boolean;
+export type NewBlogPost = Omit<BlogPost, 'id'>
+
+export const getPostBySlug = async (slug: string): Promise<BlogPost | null> => {
+  try {
+    const postsRef = collection(db, 'posts')
+    const q = query(
+      postsRef,
+      where('slug', '==', slug),
+      limit(1)
+    )
+
+    const querySnapshot = await getDocs(q)
+    
+    if (querySnapshot.empty) {
+      return null
+    }
+
+    const doc = querySnapshot.docs[0]
+    const data = doc.data()
+    
+    return {
+      id: doc.id,
+      title: data.title,
+      date: data.date.toDate(),
+      slug: data.slug,
+      tags: data.tags || [],
+      draft: data.draft,
+      summary: data.summary,
+      content: data.content,
+      author: data.author
+    }
+  } catch (error) {
+    console.error('Error getting post by slug:', error)
+    throw error
+  }
 }
 
-// Constants
-const POSTS_PER_PAGE = 5;
-
-// Functions
-export const createBlogPost = async (postData: BlogPost) => {
+export const createBlogPost = async (postData: NewBlogPost) => {
   try {
     const docRef = await addDoc(collection(db, 'posts'), {
       ...postData,
       date: Timestamp.fromDate(postData.date),
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
-    });
-    return docRef.id;
+    })
+    return docRef.id
   } catch (error) {
-    console.error('Error creating blog post:', error);
-    throw error;
+    console.error('Error creating blog post:', error)
+    throw error
   }
-};
+}
+
+export type PostsResponse = {
+  posts: BlogPost[]
+  lastVisible: QueryDocumentSnapshot | null
+  hasMore: boolean
+}
 
 export const getPublishedPosts = async (
-  lastVisible?: DocumentSnapshot | null,
-  perPage: number = POSTS_PER_PAGE
-): Promise<PublishedPostsResult> => {
+  lastVisible?: QueryDocumentSnapshot,
+  limit: number = 10
+): Promise<PostsResponse> => {
   try {
+    const postsRef = collection(db, 'posts')
     let q = query(
-      collection(db, 'posts'),
+      postsRef,
       where('draft', '==', false),
       orderBy('date', 'desc'),
-      limit(perPage)
-    );
+      firestoreLimit(limit + 1)  // Get one extra to check if there are more
+    )
 
     if (lastVisible) {
-      q = query(
-        collection(db, 'posts'),
-        where('draft', '==', false),
-        orderBy('date', 'desc'),
-        startAfter(lastVisible),
-        limit(perPage)
-      );
+      q = query(q, startAfter(lastVisible))
     }
 
-    const querySnapshot = await getDocs(q);
-    const lastVisibleDoc = querySnapshot.docs[querySnapshot.docs.length - 1] || null;
+    const querySnapshot = await getDocs(q)
+    const docs = querySnapshot.docs
 
-    const posts = querySnapshot.docs.map((doc: QueryDocumentSnapshot) => {
-      const data = doc.data() as FirestorePost;
+    // Check if there are more posts
+    const hasMore = docs.length > limit
+    const postsToReturn = hasMore ? docs.slice(0, -1) : docs // Remove the extra document if there are more
+
+    const posts = postsToReturn.map(doc => {
+      const data = doc.data()
       return {
         id: doc.id,
-        ...data,
+        title: data.title,
         date: data.date.toDate(),
-      };
-    });
+        slug: data.slug,
+        tags: data.tags || [],
+        draft: data.draft,
+        summary: data.summary,
+        content: data.content,
+        author: data.author
+      } as BlogPost
+    })
 
-    return {
+    return { 
       posts,
-      lastVisible: lastVisibleDoc,
-      hasMore: querySnapshot.docs.length === perPage
-    };
+      lastVisible: docs.length > 0 ? docs[docs.length - 1] : null,
+      hasMore
+    }
   } catch (error) {
-    console.error('Error getting blog posts:', error);
-    throw error;
+    console.error('Error getting published posts:', error)
+    throw error
   }
-};
+}
 
 // ... rest of your firebase utility functions

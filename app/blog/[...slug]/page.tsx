@@ -1,120 +1,151 @@
-import 'css/prism.css'
-import 'katex/dist/katex.css'
-
 import PageTitle from '@/components/PageTitle'
-import { components } from '@/components/MDXComponents'
-import { MDXLayoutRenderer } from 'pliny/mdx-components'
-import { sortPosts, coreContent, allCoreContent } from 'pliny/utils/contentlayer'
-import { allBlogs, allAuthors } from 'contentlayer/generated'
-import type { Authors, Blog } from 'contentlayer/generated'
-import PostSimple from '@/layouts/PostSimple'
 import PostLayout from '@/layouts/PostLayout'
-import PostBanner from '@/layouts/PostBanner'
-import { Metadata } from 'next'
-import siteMetadata from '@/data/siteMetadata'
+import { getPostBySlug } from '../../../utils/firebase'
 import { notFound } from 'next/navigation'
+import siteMetadata from '@/data/siteMetadata'
+import { Metadata } from 'next'
+import { Blog } from 'contentlayer/generated'
+import { Authors } from 'contentlayer/generated'
+import { CoreContent } from '../../../utils/CoreContent'
 
 const defaultLayout = 'PostLayout'
-const layouts = {
-  PostSimple,
-  PostLayout,
-  PostBanner,
-}
 
-export async function generateMetadata(props: {
-  params: Promise<{ slug: string[] }>
+export async function generateMetadata({
+  params,
+}: {
+  params: { slug: string[] }
 }): Promise<Metadata | undefined> {
-  const params = await props.params
-  const slug = decodeURI(params.slug.join('/'))
-  const post = allBlogs.find((p) => p.slug === slug)
-  const authorList = post?.authors || ['default']
-  const authorDetails = authorList.map((author) => {
-    const authorResults = allAuthors.find((p) => p.slug === author)
-    return coreContent(authorResults as Authors)
-  })
-  if (!post) {
+  try {
+    const slugPath = params.slug ? params.slug.join('/') : ''
+    const decodedSlug = decodeURI(slugPath)
+    const post = await getPostBySlug(decodedSlug)
+    
+    if (!post) {
+      return
+    }
+
+    const publishedAt = new Date(post.date).toISOString()
+    const modifiedAt = publishedAt // Use same date if no lastmod
+
+    return {
+      title: post.title,
+      description: post.summary,
+      openGraph: {
+        title: post.title,
+        description: post.summary,
+        siteName: siteMetadata.title,
+        locale: 'en_US',
+        type: 'article',
+        publishedTime: publishedAt,
+        modifiedTime: modifiedAt,
+        url: './',
+        authors: [post.author],
+      },
+      twitter: {
+        card: 'summary_large_image',
+        title: post.title,
+        description: post.summary,
+      },
+    }
+  } catch (error) {
+    console.error('Error generating metadata:', error)
     return
   }
+}
 
-  const publishedAt = new Date(post.date).toISOString()
-  const modifiedAt = new Date(post.lastmod || post.date).toISOString()
-  const authors = authorDetails.map((author) => author.name)
-  let imageList = [siteMetadata.socialBanner]
-  if (post.images) {
-    imageList = typeof post.images === 'string' ? [post.images] : post.images
-  }
-  const ogImages = imageList.map((img) => {
-    return {
-      url: img.includes('http') ? img : siteMetadata.siteUrl + img,
+export default async function Page({
+  params,
+}: {
+  params: { slug: string[] }
+}) {
+  try {
+    const slugPath = params.slug ? params.slug.join('/') : ''
+    const decodedSlug = decodeURI(slugPath)
+    const post = await getPostBySlug(decodedSlug)
+
+    if (!post) {
+      return notFound()
     }
-  })
 
-  return {
-    title: post.title,
-    description: post.summary,
-    openGraph: {
+    const authorDetails: CoreContent<Authors>[] = [{
+      name: post.author,
+      slug: 'default-author',
+      path: '/authors/default-author',
+      type: 'Authors' as const,
+      readingTime: { text: '', minutes: 0, time: 0, words: 0 },
+      filePath: '',
+      toc: [],
+      structuredData: {
+        type: 'Person',
+        articleBody: '',
+        headline: post.author,
+        datePublished: new Date(post.date).toISOString(),
+        dateModified: new Date(post.date).toISOString(),
+      }
+    }]
+
+    const mainContent: CoreContent<Blog> = {
       title: post.title,
-      description: post.summary,
-      siteName: siteMetadata.title,
-      locale: 'en_US',
-      type: 'article',
-      publishedTime: publishedAt,
-      modifiedTime: modifiedAt,
-      url: './',
-      images: ogImages,
-      authors: authors.length > 0 ? authors : [siteMetadata.author],
-    },
-    twitter: {
-      card: 'summary_large_image',
-      title: post.title,
-      description: post.summary,
-      images: imageList,
-    },
-  }
-}
+      date: post.date,
+      slug: post.slug,
+      tags: post.tags,
+      lastmod: post.date,
+      draft: post.draft,
+      summary: post.summary,
+      authors: [post.author],
+      path: `/blog/${post.slug}`,
+      type: 'Blog' as const,
+      readingTime: { 
+        text: '5 min', 
+        minutes: 5, 
+        time: 300000, 
+        words: 1000 
+      },
+      filePath: `blog/${post.slug}.mdx`,
+      toc: [
+        {
+          value: post.title,
+          depth: 1,
+          url: `#${post.slug}`
+        }
+      ],
+      structuredData: {
+        type: 'Article',
+        articleBody: post.content,
+        headline: post.title,
+        datePublished: new Date(post.date).toISOString(),
+        dateModified: new Date(post.date).toISOString(),
+      }
+    }
 
-export const generateStaticParams = async () => {
-  return allBlogs.map((p) => ({ slug: p.slug.split('/').map((name) => decodeURI(name)) }))
-}
+    const jsonLd = {
+      '@context': 'https://schema.org',
+      '@type': 'BlogPosting',
+      headline: post.title,
+      datePublished: new Date(post.date).toISOString(),
+      dateModified: new Date(post.date).toISOString(),
+      description: post.summary,
+      author: {
+        '@type': 'Person',
+        name: post.author,
+      },
+    }
 
-export default async function Page(props: { params: Promise<{ slug: string[] }> }) {
-  const params = await props.params
-  const slug = decodeURI(params.slug.join('/'))
-  // Filter out drafts in production
-  const sortedCoreContents = allCoreContent(sortPosts(allBlogs))
-  const postIndex = sortedCoreContents.findIndex((p) => p.slug === slug)
-  if (postIndex === -1) {
+    return (
+      <>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+        <PostLayout content={mainContent} authorDetails={authorDetails}>
+          <div className="prose max-w-none">
+            {post.content}
+          </div>
+        </PostLayout>
+      </>
+    )
+  } catch (error) {
+    console.error('Error loading post:', error)
     return notFound()
   }
-
-  const prev = sortedCoreContents[postIndex + 1]
-  const next = sortedCoreContents[postIndex - 1]
-  const post = allBlogs.find((p) => p.slug === slug) as Blog
-  const authorList = post?.authors || ['default']
-  const authorDetails = authorList.map((author) => {
-    const authorResults = allAuthors.find((p) => p.slug === author)
-    return coreContent(authorResults as Authors)
-  })
-  const mainContent = coreContent(post)
-  const jsonLd = post.structuredData
-  jsonLd['author'] = authorDetails.map((author) => {
-    return {
-      '@type': 'Person',
-      name: author.name,
-    }
-  })
-
-  const Layout = layouts[post.layout || defaultLayout]
-
-  return (
-    <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
-      <Layout content={mainContent} authorDetails={authorDetails} next={next} prev={prev}>
-        <MDXLayoutRenderer code={post.body.code} components={components} toc={post.toc} />
-      </Layout>
-    </>
-  )
 }
